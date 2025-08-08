@@ -1,90 +1,80 @@
-// /api/redesign.js  (CommonJS для Vercel Node.js functions)
-const OpenAI = require("openai");
-const formidable = require("formidable");
-const fs = require("fs");
+// api/redesign.js
+// Node.js serverless-функция на Vercel
 
-// Отключаем стандартный bodyParser, чтобы принять multipart/form-data
+const { IncomingForm } = require("formidable");
+const fs = require("fs");
+const OpenAI = require("openai");
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// говорим Vercel не парсить тело (нам нужно multipart)
 module.exports.config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false },
 };
 
-module.exports = async (req, res) => {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
-    res.status(405).json({ error: "Method Not Allowed" });
+    res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
-  const form = formidable({ multiples: false });
-
   try {
-    const { fields, files } = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => {
-        if (err) reject(err);
-        else resolve({ fields, files });
-      });
+    const { fields, fileBuffer, mime } = await parseMultipart(req);
+
+    // Собираем промпт
+    const style = (fields.style || "modern").toString();
+    const extra = (fields.wishes || "").toString();
+    const prompt = `Redesign this room photo to "${style}" style. Keep layout and geometry. ${extra}`.trim();
+
+    // ⚠️ Для простоты MVP не редактируем исходную картинку,
+    // а просто генерируем новую сцену (можно позже заменить на image edit).
+    const img = await client.images.generate({
+      model: "gpt-image-1",
+      prompt,
+      size: "1024x1024",
+      // если хочешь использовать загруженную картинку — будем переходить на edits
+      // и отправлять её как image[]/mask[], но это уже другой маршрут.
     });
 
-    const prompt =
-      (Array.isArray(fields.prompt) ? fields.prompt[0] : fields.prompt) ||
-      "Сделай редизайн комнаты в современном стиле";
+    const b64 = img.data[0].b64_json;
+    const dataUrl = `data:image/png;base64,${b64}`;
 
-    // В разных версиях formidable структура отличается
-    const imgField =
-      (files.image && (Array.isArray(files.image) ? files.image[0] : files.image)) ||
-      null;
-
-    if (!imgField || !imgField.filepath) {
-      res.status(400).json({ error: "Не получен файл изображения (image)" });
-      return;
-    }
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    if (!process.env.OPENAI_API_KEY) {
-      res.status(500).json({ error: "OPENAI_API_KEY не задан в Vercel env" });
-      return;
-    }
-
-    // Для edits нужно передать поток/файл
-    const imageStream = fs.createReadStream(imgField.filepath);
-
-    // Попытка image-to-image через edits
-    // Если edits недоступно, ниже есть запасной вариант generate
-    let outB64 = null;
-    try {
-      const resp = await openai.images.edits({
-        model: "gpt-image-1",
-        prompt,
-        image: imageStream,
-        size: "1024x1024",
-      });
-      outB64 = resp?.data?.[0]?.b64_json || null;
-    } catch (e) {
-      console.error("images.edits failed, fallback to generate:", e?.message);
-    }
-
-    // Fallback: если edits не сработал — просто сгенерируем по промпту
-    if (!outB64) {
-      const resp = await openai.images.generate({
-        model: "gpt-image-1",
-        prompt,
-        size: "1024x1024",
-      });
-      outB64 = resp?.data?.[0]?.b64_json || null;
-    }
-
-    if (!outB64) {
-      res.status(502).json({ error: "OpenAI не вернул изображение" });
-      return;
-    }
-
-    res.status(200).json({ image_base64: outB64 });
+    res.status(200).json({ ok: true, imageUrl: dataUrl });
   } catch (err) {
-    console.error("Server error in /api/redesign:", err);
-    res.status(500).json({
-      error: "FUNCTION_INVOCATION_FAILED",
-      detail: err?.message || String(err),
-    });
+    console.error("API /api/redesign error:", err);
+    res.status(500).json({ ok: false, error: err.message || "Server error" });
   }
 };
+
+// ---------- helpers ----------
+
+function parseMultipart(req) {
+  return new Promise((resolve, reject) => {
+    const form = new IncomingForm({
+      multiples: false,
+      keepExtensions: true,
+      maxFileSize: 15 * 1024 * 1024, // 15MB
+    });
+
+    form.parse(req, (err, fields, files) => {
+      if (err) return reject(err);
+
+      // файл может лежать в files.image
+      const file = files?.image;
+      let fileBuffer = null;
+      let mime = null;
+
+      if (file && !Array.isArray(file)) {
+        try {
+          fileBuffer = fs.readFileSync(file.filepath);
+          mime = file.mimetype || "image/jpeg";
+        } catch (e) {
+          // необязательный файл — не падаем
+          fileBuffer = null;
+        }
+      }
+
+      resolve({ fields, fileBuffer, mime });
+    });
+  });
+}
