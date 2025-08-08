@@ -1,62 +1,64 @@
-// /api/redesign.js
+// api/redesign.js
+import OpenAI from "openai";
+import formidable from "formidable";
+import fs from "fs";
+
+// Отключаем стандартный bodyParser, чтобы работать с FormData
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Метод не поддерживается" });
   }
 
+  const form = formidable({ multiples: false });
+
   try {
-    const { imageDataURL, mime, style, roomType, length, width, height, wishes, budget } = req.body || {};
-
-    if (!imageDataURL) {
-      return res.status(400).json({ error: 'imageDataURL is required' });
-    }
-
-    // извлекаем base64 из dataURL
-    const base64 = imageDataURL.split(',')[1];
-    const buffer = Buffer.from(base64, 'base64');
-    const fileType = (mime && typeof mime === 'string') ? mime : 'image/png';
-
-    // формируем подсказку для редизайна
-    const prompt =
-      `Redesign this ${roomType || 'room'} in style "${style || 'Modern'}". ` +
-      `Keep the layout and structure, change finishes/furniture/lighting to match the style. ` +
-      (length && width && height ? `Room size: ${length}m x ${width}m x ${height}m. ` : '') +
-      (budget ? `Budget tier: ${budget}. ` : '') +
-      (wishes ? `Extra wishes: ${wishes}. ` : '') +
-      `Output a photorealistic interior render.`
-
-    // Используем OpenAI Images Edits как image-to-image
-    // (в Node 18 на Vercel доступны глобальные FormData/Blob)
-    const form = new FormData();
-    form.append('prompt', prompt);
-    form.append('image', new Blob([buffer], { type: fileType }), 'input.png');
-    // Можно дополнительно задать размер:
-    form.append('size', '1024x1024');
-
-    const r = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: form
+    // Парсим загруженный файл и prompt
+    const [fields, files] = await new Promise((resolve, reject) => {
+      form.parse(req, (err, fields, files) => {
+        if (err) reject(err);
+        else resolve([fields, files]);
+      });
     });
 
-    if (!r.ok) {
-      const txt = await r.text();
-      return res.status(500).json({ error: 'OpenAI error', details: txt });
+    const prompt = fields.prompt || "Сделай редизайн комнаты в современном стиле";
+    const imageFile = files.image?.[0] || files.image; // Vercel/Node разные версии formidable
+    if (!imageFile) {
+      return res.status(400).json({ error: "Файл изображения не получен" });
     }
 
-    const data = await r.json();
-    // ожидаем data.data[0].b64_json
-    const out = data?.data?.[0]?.b64_json;
-    if (!out) {
-      return res.status(500).json({ error: 'No image returned from OpenAI' });
+    const imageData = fs.readFileSync(imageFile.filepath);
+
+    // Запрос к OpenAI для генерации картинки
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const response = await openai.images.generate({
+      model: "gpt-image-1",
+      prompt,
+      size: "1024x1024",
+      image: [
+        {
+          name: "input_image",
+          buffer: imageData,
+        },
+      ],
+    });
+
+    // Проверяем ответ
+    if (!response.data || !response.data[0]?.b64_json) {
+      return res.status(500).json({ error: "OpenAI не вернул картинку" });
     }
 
-    return res.status(200).json({ imageBase64: out });
-  } catch (e) {
-    console.error('API redesign error:', e);
-    return res.status(500).json({ error: 'Server error' });
+    const imageBase64 = response.data[0].b64_json;
+
+    res.status(200).json({ image_base64: imageBase64 });
+  } catch (err) {
+    console.error("Ошибка в redesign.js:", err);
+    res.status(500).json({ error: err.message || "Ошибка на сервере" });
   }
 }
