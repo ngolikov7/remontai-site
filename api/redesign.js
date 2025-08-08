@@ -1,11 +1,10 @@
 // /api/redesign.js
-// Node.js Serverless Function for Vercel (CommonJS)
+// Vercel Serverless Function (CommonJS)
 
 const { IncomingForm } = require("formidable");
 const fs = require("fs/promises");
+const path = require("path");
 
-// В Next.js роутерах нужно отключить встроенный bodyParser для multipart.
-// В обычной Vercel-функции это не обязательно, но не мешает.
 module.exports.config = {
   api: { bodyParser: false },
 };
@@ -27,33 +26,43 @@ module.exports = async (req, res) => {
     // 1) Парсим multipart/form-data
     const { fields, file } = await parseMultipart(req);
 
-    // 2) Готовим форму для Stability v1 image-to-image
-    //    ВАЖНО: у v1 ключ картинки — "init_image"
-    const buffer = await fs.readFile(file.filepath || file.path);
+    if (!file) {
+      res.status(400).json({ ok: false, error: "no_file_uploaded" });
+      return;
+    }
 
+    // гарантированно получаем путь
+    const filePath =
+      file.filepath || file.path || file.tempFilePath || file.file || null;
+
+    if (!filePath) {
+      res.status(400).json({
+        ok: false,
+        error: "file_without_path",
+        details: "Uploaded file has no path",
+      });
+      return;
+    }
+
+    const buffer = await fs.readFile(filePath);
+
+    // 2) Сборка формы для Stability v1 image-to-image
     const fd = new FormData();
     fd.append(
       "init_image",
       new Blob([buffer], { type: file.mimetype || "image/jpeg" }),
-      file.originalFilename || "input.jpg"
+      file.originalFilename || path.basename(filePath) || "input.jpg"
     );
 
-    // Настройки (можно править по вкусу)
-    // image_strength: 0..1 (чем меньше — тем сильнее влияние prompt/генерации)
     fd.append("image_strength", String(fields.image_strength ?? "0.35"));
-
-    // Текстовый запрос (если передаётся с фронта)
     if (fields.prompt) fd.append("prompt", String(fields.prompt));
-
-    // Формат результата — сразу PNG
     fd.append("output_format", "png");
 
-    // Доп. параметры по желанию
     if (fields.cfg_scale !== undefined)
       fd.append("cfg_scale", String(fields.cfg_scale));
     if (fields.seed !== undefined) fd.append("seed", String(fields.seed));
 
-    // 3) Запрос в Stability API
+    // 3) Вызов Stability
     const endpoint =
       "https://api.stability.ai/v1/generation/stable-image-core-v1-1/image-to-image";
 
@@ -61,7 +70,6 @@ module.exports = async (req, res) => {
       method: "POST",
       headers: {
         Authorization: `Bearer ${STABILITY_API_KEY}`,
-        // Не ставим Content-Type вручную — FormData сделает boundary сама
         Accept: "image/png",
       },
       body: fd,
@@ -75,42 +83,53 @@ module.exports = async (req, res) => {
       return;
     }
 
-    // 4) Отдаём PNG как data URL (base64), чтобы фронт сразу показал картинку
+    // 4) PNG -> data URL
     const arrayBuf = await resp.arrayBuffer();
     const base64 = Buffer.from(arrayBuf).toString("base64");
     res.status(200).json({ ok: true, image: `data:image/png;base64,${base64}` });
   } catch (e) {
-    res
-      .status(500)
-      .json({ ok: false, error: "server_error", details: e?.message || String(e) });
+    res.status(500).json({
+      ok: false,
+      error: "server_error",
+      details: e?.message || String(e),
+    });
   }
 };
 
 // ---- helpers ----
 
+function firstFileOf(obj) {
+  if (!obj) return null;
+  if (Array.isArray(obj)) return obj[0] || null;
+  return obj;
+}
+
 function parseMultipart(req) {
   return new Promise((resolve, reject) => {
-    // Сохранять файл на диск (tmp) — стандартный путь для formidable,
-    // нам это подходит: потом читаем его в буфер.
     const form = new IncomingForm({
       multiples: false,
       keepExtensions: true,
+      // важное добавление — сохраняем файл в /tmp
+      uploadDir: "/tmp",
+      allowEmptyFiles: false,
     });
 
     form.parse(req, (err, fields, files) => {
       if (err) return reject(err);
 
-      // Ищем файл в известных полях; если имя другое — берём первый
-      const file =
-        files.photo ||
-        files.file ||
-        files.image ||
-        files.init_image ||
-        (files && Object.values(files)[0]);
+      // пытаемся найти файл под разными именами
+      let file =
+        firstFileOf(files.photo) ||
+        firstFileOf(files.file) ||
+        firstFileOf(files.image) ||
+        firstFileOf(files.init_image);
 
       if (!file) {
-        return reject(new Error("no_file_uploaded"));
+        // если ничего не нашли — берём вообще первый файл из объекта
+        const all = files ? Object.values(files) : [];
+        if (all.length) file = firstFileOf(all[0]);
       }
+
       resolve({ fields, file });
     });
   });
