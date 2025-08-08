@@ -1,78 +1,38 @@
-<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
-<html>
+<!DOCTYPE html>
+<html lang="ru">
 <head>
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-  <meta http-equiv="Content-Style-Type" content="text/css">
-  <title></title>
-  <meta name="Generator" content="Cocoa HTML Writer">
-  <meta name="CocoaVersion" content="2299.7">
-  <style type="text/css">
-    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica}
-    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Helvetica; min-height: 14.0px}
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ДизайнИИ — умный ремонт</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .step-active { background: linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:#fff; }
+    .step-completed { background: linear-gradient(135deg,#11998e 0%,#38ef7d 100%); color:#fff; }
+    .step-inactive { background:#f3f4f6; color:#6b7280; }
+    .upload-area { border:2px dashed #d1d5db; transition: all .3s ease; }
+    .upload-area:hover { border-color:#667eea; background:#f8faff; }
+    .upload-area.dragover { border-color:#667eea; background:#f0f4ff; }
+    .ai-thinking { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .chat-message { animation: slideIn .3s ease-out; }
+    @keyframes slideIn { from{opacity:0; transform:translateY(10px)} to{opacity:1; transform:translateY(0)} }
   </style>
 </head>
-<body>
-<p class="p1">&lt;!DOCTYPE html&gt;</p>
-<p class="p1">&lt;html lang="ru"&gt;</p>
-<p class="p1">&lt;head&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;meta charset="UTF-8" /&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;meta name="viewport" content="width=device-width, initial-scale=1.0" /&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;title&gt;RemontAI MVP&lt;/title&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;script src="https://cdn.tailwindcss.com"&gt;&lt;/script&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;style&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>html {</p>
-<p class="p1"><span class="Apple-converted-space">      </span>scroll-behavior: smooth;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/style&gt;</p>
-<p class="p1">&lt;/head&gt;</p>
-<p class="p1">&lt;body class="bg-gray-50 font-sans"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;header class="p-6 bg-white shadow-md sticky top-0 z-50"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;div class="max-w-5xl mx-auto flex justify-between items-center"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;h1 class="text-xl font-bold"&gt;RemontAI&lt;/h1&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;nav class="space-x-4"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;button onclick="scrollToSection('#about')" class="hover:underline"&gt;О проекте&lt;/button&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;button onclick="scrollToSection('#features')" class="hover:underline"&gt;Возможности&lt;/button&gt;</p>
-<p class="p1"><span class="Apple-converted-space">        </span>&lt;button onclick="scrollToSection('#contact')" class="hover:underline"&gt;Контакты&lt;/button&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;/nav&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/header&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;section id="hero" class="h-screen flex flex-col justify-center items-center bg-gradient-to-r from-blue-100 to-blue-200"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;h2 class="text-4xl font-bold mb-4"&gt;Ваш AI-помощник в ремонте&lt;/h2&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;p class="max-w-lg text-center mb-6"&gt;Загружайте фото, получайте расчёты и подбор материалов за секунды.&lt;/p&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;a href="#features" class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"&gt;Узнать больше&lt;/a&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/section&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;section id="about" class="py-20 max-w-5xl mx-auto px-4"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;h3 class="text-3xl font-bold mb-6"&gt;О проекте&lt;/h3&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;p&gt;RemontAI — это сервис, который помогает вам планировать и контролировать ремонт от идеи до реализации, используя возможности искусственного интеллекта.&lt;/p&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/section&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;section id="features" class="py-20 bg-white max-w-5xl mx-auto px-4"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;h3 class="text-3xl font-bold mb-6"&gt;Возможности&lt;/h3&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;ul class="list-disc list-inside space-y-2"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;li&gt;Анализ фотографий помещений&lt;/li&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;li&gt;Подбор материалов и мебели&lt;/li&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;li&gt;Расчёт бюджета&lt;/li&gt;</p>
-<p class="p1"><span class="Apple-converted-space">      </span>&lt;li&gt;Связь с проверенными подрядчиками&lt;/li&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;/ul&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/section&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;section id="contact" class="py-20 max-w-5xl mx-auto px-4"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;h3 class="text-3xl font-bold mb-6"&gt;Контакты&lt;/h3&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;p&gt;Напишите нам: &lt;a href="mailto:info@remontai.ai" class="text-blue-600 underline"&gt;info@remontai.ai&lt;/a&gt;&lt;/p&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/section&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;footer class="p-6 bg-gray-800 text-white text-center"&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>&lt;p&gt;© 2025 RemontAI. Все права защищены.&lt;/p&gt;</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/footer&gt;</p>
-<p class="p2"><br></p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;script&gt;</p>
-<p class="p1"><span class="Apple-converted-space">    </span>function scrollToSection(id) {</p>
-<p class="p1"><span class="Apple-converted-space">      </span>document.querySelector(id).scrollIntoView({ behavior: 'smooth' });</p>
-<p class="p1"><span class="Apple-converted-space">    </span>}</p>
-<p class="p1"><span class="Apple-converted-space">  </span>&lt;/script&gt;</p>
-<p class="p1">&lt;/body&gt;</p>
-<p class="p1">&lt;/html&gt;</p>
-</body>
-</html>
+<body class="bg-gray-50 min-h-screen">
+  <!-- Header -->
+  <header class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 py-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 bg-gradient-to-r from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+            <span class="text-white font-bold text-lg">🏠</span>
+          </div>
+          <h1 class="text-2xl font-bold text-gray-900">ДизайнИИ</h1>
+        </div>
+        <div class="text-sm text-gray-600">Умный ремонт с искусственным интеллектом</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <!--
