@@ -55,7 +55,7 @@ module.exports = async (req, res) => {
     );
 
     fd.append("image_strength", String(fields.image_strength ?? "0.35"));
-    if (fields.prompt) fd.append("prompt", String(fields.prompt));
+  
     fd.append("output_format", "png");
 
     if (fields.cfg_scale !== undefined)
