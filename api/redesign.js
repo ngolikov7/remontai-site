@@ -1,74 +1,62 @@
-// api/redesign.js
-// Vercel Serverless Function (Node 18+)
-
+// /api/redesign.js
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Use POST' });
-    return;
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
-    // Мы шлём JSON с base64-данными картинки
-    const { imageBase64, prompt } = req.body || {};
-    if (!imageBase64) {
-      res.status(400).json({ error: 'imageBase64 is required' });
-      return;
+    const { imageDataURL, mime, style, roomType, length, width, height, wishes, budget } = req.body || {};
+
+    if (!imageDataURL) {
+      return res.status(400).json({ error: 'imageDataURL is required' });
     }
 
-    // Парсим data URL
-    const m = imageBase64.match(/^data:(.+);base64,(.*)$/);
-    if (!m) {
-      res.status(400).json({ error: 'Invalid data URL' });
-      return;
-    }
-    const mime = m[1];
-    const buf = Buffer.from(m[2], 'base64');
+    // извлекаем base64 из dataURL
+    const base64 = imageDataURL.split(',')[1];
+    const buffer = Buffer.from(base64, 'base64');
+    const fileType = (mime && typeof mime === 'string') ? mime : 'image/png';
 
-    // Готовим multipart form для OpenAI Images Edit (image-to-image)
-    // модель: gpt-image-1 (преемник DALL·E 3; поддерживает image[]).
-    // Документация по Images API: platform.openai.com (см. цитату). :contentReference[oaicite:0]{index=0}
+    // формируем подсказку для редизайна
+    const prompt =
+      `Redesign this ${roomType || 'room'} in style "${style || 'Modern'}". ` +
+      `Keep the layout and structure, change finishes/furniture/lighting to match the style. ` +
+      (length && width && height ? `Room size: ${length}m x ${width}m x ${height}m. ` : '') +
+      (budget ? `Budget tier: ${budget}. ` : '') +
+      (wishes ? `Extra wishes: ${wishes}. ` : '') +
+      `Output a photorealistic interior render.`
+
+    // Используем OpenAI Images Edits как image-to-image
+    // (в Node 18 на Vercel доступны глобальные FormData/Blob)
     const form = new FormData();
-    form.append('model', 'gpt-image-1');
-    form.append('image[]', new Blob([buf], { type: mime }), 'input.png');
-    form.append(
-      'prompt',
-      prompt ||
-        'Redesign this room interior: fresh renovation, realistic photo render, keep layout, improve finishes and lighting.'
-    );
-    form.append('size', '1024x1024'); // можно 1024x1024 / 1024x1536 / 1536x1024
+    form.append('prompt', prompt);
+    form.append('image', new Blob([buffer], { type: fileType }), 'input.png');
+    // Можно дополнительно задать размер:
+    form.append('size', '1024x1024');
 
-    const resp = await fetch('https://api.openai.com/v1/images/edits', {
+    const r = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
       },
-      body: form,
+      body: form
     });
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      res.status(resp.status).json({ error: 'OpenAI error', details: text });
-      return;
+    if (!r.ok) {
+      const txt = await r.text();
+      return res.status(500).json({ error: 'OpenAI error', details: txt });
     }
 
-    const data = await resp.json();
-    // Ответ содержит base64 картинки в data[0].b64_json
-    const b64 = data?.data?.[0]?.b64_json;
-    if (!b64) {
-      res.status(500).json({ error: 'No image returned' });
-      return;
+    const data = await r.json();
+    // ожидаем data.data[0].b64_json
+    const out = data?.data?.[0]?.b64_json;
+    if (!out) {
+      return res.status(500).json({ error: 'No image returned from OpenAI' });
     }
 
-    res.status(200).json({ imageBase64: `data:image/png;base64,${b64}` });
+    return res.status(200).json({ imageBase64: out });
   } catch (e) {
-    res.status(500).json({ error: e?.message || 'Server error' });
+    console.error('API redesign error:', e);
+    return res.status(500).json({ error: 'Server error' });
   }
 }
-
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '15mb', // чтобы влезали фото с телефона
-    },
-  },
-};
