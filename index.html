@@ -420,5 +420,82 @@
     // init
     setStep(1);
   </script>
+  <script>
+  async function fileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  // Пример: дергаем генерацию при нажатии на кнопку "Начать генерацию дизайна"
+  const startBtn = document.getElementById('start-generation');
+  startBtn?.addEventListener('click', async () => {
+    try {
+      const fileInput = document.getElementById('fileInput');
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        alert('Сначала выберите фото комнаты');
+        return;
+      }
+
+      // Собираем кастомный prompt из выбранного стиля/пожеланий
+      const style = document.querySelector('.style-btn.selected')?.dataset?.style || 'modern';
+      const budget = document.getElementById('budget')?.value || '';
+      const wishes = document.getElementById('additional-wishes')?.value || '';
+      const roomType = document.getElementById('room-type')?.value || '';
+
+      const prompt =
+        `Redesign this ${roomType || 'room'} in ${style} style. ` +
+        (budget ? `Budget: ${budget} RUB. ` : '') +
+        (wishes ? `Notes: ${wishes}. ` : '') +
+        `Keep geometry and main furniture positions, produce a realistic photo render.`;
+
+      // Показываем экран прогресса, если есть
+      document.getElementById('generation-section')?.classList.remove('hidden');
+
+      // file -> base64
+      const imageBase64 = await fileToDataURL(file);
+
+      // Запрос к нашей серверлесс-функции
+      const resp = await fetch('/api/redesign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, prompt }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.error || 'Request failed');
+
+      // Перекидываем на экран ревью и ставим картинку
+      document.getElementById('review-section')?.classList.remove('hidden');
+      document.getElementById('generation-section')?.classList.add('hidden');
+
+      // Покажи результат на панели "Новый дизайн":
+      const newDesignBox = document.querySelector('#review-section .lg\\:grid-cols-2 > div:nth-child(2) .h-64');
+      if (newDesignBox) {
+        newDesignBox.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = data.imageBase64;
+        img.className = 'max-h-64 mx-auto rounded-lg shadow';
+        newDesignBox.appendChild(img);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка генерации: ' + (err.message || err));
+    }
+  });
+
+  // Визуально помечать выбранную кнопку стиля (если нужно)
+  document.querySelectorAll('.style-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.style-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+</script>
+
 </body>
 </html>
