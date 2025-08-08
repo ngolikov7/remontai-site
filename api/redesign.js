@@ -1,136 +1,105 @@
-// /api/redesign.js
-// Vercel Serverless Function (CommonJS)
+// api/redesign.js
+// Vercel serverless function (Node 18+)
+// Принимает multipart/form-data от фронта: image (файл), а также опционально
+// image_strength, cfg_scale, seed, steps, style_preset.
+// Проксирует в Stability image-to-image (stable-image-core-v1.1) и возвращает PNG.
 
-const { IncomingForm } = require("formidable");
-const fs = require("fs/promises");
-const path = require("path");
-
-module.exports.config = {
-  api: { bodyParser: false },
+export const config = {
+  api: {
+    bodyParser: false, // важнo: мы сами читаем form-data через Busboy-like API FormData
+  },
 };
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ ok: false, error: "method_not_allowed" });
+  }
+
   try {
-    if (req.method !== "POST") {
-      res.status(405).json({ ok: false, error: "method_not_allowed" });
-      return;
+    // Получаем form-data из входящего запроса
+    // Для Node на Vercel удобно прочитать сырое тело и собрать FormData вручную,
+    // но современный runtime позволяет использовать web FormData из Request.
+    // Оборачиваем req в Request, чтобы получить formData().
+    const url = `http://localhost${req.url || "/api/redesign"}`;
+    const request = new Request(url, {
+      method: req.method,
+      headers: req.headers,
+      body: req,
+      duplex: "half",
+    });
+
+    const incoming = await request.formData();
+
+    const imageFile = incoming.get("image");
+    if (!imageFile || typeof imageFile === "string") {
+      return res.status(400).json({ ok: false, error: "no_image_file" });
     }
 
-    const STABILITY_API_KEY =
-      process.env.STABILITY_API_KEY || process.env.STABILITY_KEY;
-    if (!STABILITY_API_KEY) {
-      res.status(500).json({ ok: false, error: "missing_stability_api_key" });
-      return;
-    }
+    // Доп. поля
+    const fields = {
+      image_strength: incoming.get("image_strength"),
+      cfg_scale: incoming.get("cfg_scale"),
+      seed: incoming.get("seed"),
+      steps: incoming.get("steps"),
+      style_preset: incoming.get("style_preset"),
+    };
 
-    // 1) Парсим multipart/form-data
-    const { fields, file } = await parseMultipart(req);
-
-    if (!file) {
-      res.status(400).json({ ok: false, error: "no_file_uploaded" });
-      return;
-    }
-
-    // гарантированно получаем путь
-    const filePath =
-      file.filepath || file.path || file.tempFilePath || file.file || null;
-
-    if (!filePath) {
-      res.status(400).json({
-        ok: false,
-        error: "file_without_path",
-        details: "Uploaded file has no path",
-      });
-      return;
-    }
-
-    const buffer = await fs.readFile(filePath);
-
-    // 2) Сборка формы для Stability v1 image-to-image
+    // Собираем form-data для Stability
     const fd = new FormData();
-    fd.append(
-      "init_image",
-      new Blob([buffer], { type: file.mimetype || "image/jpeg" }),
-      file.originalFilename || path.basename(filePath) || "input.jpg"
-    );
 
-    fd.append("image_strength", String(fields.image_strength ?? "0.35"));
-  
-    fd.append("output_format", "png");
+    // Обязательно передаём файл: имя возьмём из входящего, тип — из blob.type
+    const fileName =
+      (imageFile.name && String(imageFile.name)) || "upload.jpg";
+    fd.append("image", imageFile, fileName);
 
-    if (fields.cfg_scale !== undefined)
+    // Разрешённые поля (prompt и output_format — НЕ отправляем!)
+    if (fields.image_strength !== null && fields.image_strength !== undefined) {
+      fd.append("image_strength", String(fields.image_strength));
+    }
+    if (fields.cfg_scale !== null && fields.cfg_scale !== undefined) {
       fd.append("cfg_scale", String(fields.cfg_scale));
-    if (fields.seed !== undefined) fd.append("seed", String(fields.seed));
+    }
+    if (fields.seed !== null && fields.seed !== undefined) {
+      fd.append("seed", String(fields.seed));
+    }
+    if (fields.steps !== null && fields.steps !== undefined) {
+      fd.append("steps", String(fields.steps));
+    }
+    if (fields.style_preset) {
+      fd.append("style_preset", String(fields.style_preset));
+    }
 
-    // 3) Вызов Stability
-    const endpoint =
-      "https://api.stability.ai/v1/generation/stable-image-core-v1-1/image-to-image";
+    // Запрос к Stability
+    const stabilityUrl =
+      "https://api.stability.ai/v2beta/stable-image/edit/image-to-image?model=stable-image-core-v1.1";
 
-    const resp = await fetch(endpoint, {
+    const resp = await fetch(stabilityUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${STABILITY_API_KEY}`,
-        Accept: "image/png",
+        Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
+        Accept: "image/png", // формат ответа задаём заголовком
       },
       body: fd,
     });
 
     if (!resp.ok) {
-      const text = await resp.text();
-      res
+      const txt = await resp.text().catch(() => "");
+      console.error("Stability error:", resp.status, txt);
+      return res
         .status(500)
-        .json({ ok: false, error: "stability_request_failed", details: text });
-      return;
+        .json({ ok: false, error: "stability_request_failed", details: txt });
     }
 
-    // 4) PNG -> data URL
+    // Ответ — бинарный PNG
     const arrayBuf = await resp.arrayBuffer();
-    const base64 = Buffer.from(arrayBuf).toString("base64");
-    res.status(200).json({ ok: true, image: `data:image/png;base64,${base64}` });
-  } catch (e) {
-    res.status(500).json({
-      ok: false,
-      error: "server_error",
-      details: e?.message || String(e),
-    });
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).send(Buffer.from(arrayBuf));
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "server_error", details: String(err) });
   }
-};
-
-// ---- helpers ----
-
-function firstFileOf(obj) {
-  if (!obj) return null;
-  if (Array.isArray(obj)) return obj[0] || null;
-  return obj;
-}
-
-function parseMultipart(req) {
-  return new Promise((resolve, reject) => {
-    const form = new IncomingForm({
-      multiples: false,
-      keepExtensions: true,
-      // важное добавление — сохраняем файл в /tmp
-      uploadDir: "/tmp",
-      allowEmptyFiles: false,
-    });
-
-    form.parse(req, (err, fields, files) => {
-      if (err) return reject(err);
-
-      // пытаемся найти файл под разными именами
-      let file =
-        firstFileOf(files.photo) ||
-        firstFileOf(files.file) ||
-        firstFileOf(files.image) ||
-        firstFileOf(files.init_image);
-
-      if (!file) {
-        // если ничего не нашли — берём вообще первый файл из объекта
-        const all = files ? Object.values(files) : [];
-        if (all.length) file = firstFileOf(all[0]);
-      }
-
-      resolve({ fields, file });
-    });
-  });
 }
