@@ -1,68 +1,120 @@
-// /api/redesign.js
+// pages/api/redesign.js
 import formidable from 'formidable';
-import fs from 'fs';
+import * as fs from 'fs/promises';
 
 export const config = {
-  api: { bodyParser: false }, // важно: сами парсим multipart
+  api: {
+    bodyParser: false, // обязательно: мы сами парсим multipart
+  },
 };
 
-const STABILITY_URL = 'https://api.stability.ai/v2beta/stable-image/edit/image-to-image';
+// ===== НАСТРОЙКИ =====
+const STABILITY_API_KEY = process.env.STABILITY_API_KEY;
+// Модель SDXL (image-to-image)
+const ENGINE_ID = 'stable-diffusion-xl-1024-v1-0';
+const STABILITY_URL = `https://api.stability.ai/v1/generation/${ENGINE_ID}/image-to-image`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
     return res.status(405).json({ ok: false, error: 'method_not_allowed' });
   }
 
-  if (!process.env.STABILITY_API_KEY) {
-    return res.status(500).json({ ok: false, error: 'no_api_key' });
+  if (!STABILITY_API_KEY) {
+    return res.status(500).json({
+      ok: false,
+      error: 'no_api_key',
+      details: 'В переменных окружения не задан STABILITY_API_KEY',
+    });
   }
 
-  // 1) Парсим multipart из фронта
-  const form = formidable({ multiples: false, keepExtensions: true });
-  const { fields, files } = await new Promise((resolve, reject) => {
-    form.parse(req, (err, flds, fls) => (err ? reject(err) : resolve({ fields: flds, files: fls })));
-  });
+  try {
+    // 1) Разбираем multipart-форму
+    const form = formidable({ multiples: false, keepExtensions: true });
+    const { fields, files } = await new Promise((resolve, reject) => {
+      form.parse(req, (err, flds, fls) => (err ? reject(err) : resolve({ fields: flds, files: fls })));
+    });
 
-  const file = files?.image; // имя поля ДОЛЖНО быть "image"
-  if (!file) return res.status(400).json({ ok: false, error: 'no_image' });
+    // 2) Достаём файл (ожидаем поле name="image")
+    const fileAny = files.image || files.file || files.photo || files.upload;
+    const fileObj = Array.isArray(fileAny) ? fileAny[0] : fileAny;
 
-  const prompt = (fields.prompt ?? '').toString();
-  if (!prompt) return res.status(400).json({ ok: false, error: 'no_prompt' });
+    if (!fileObj) {
+      return res.status(400).json({
+        ok: false,
+        error: 'no_file',
+        details: { filesKeys: Object.keys(files) },
+      });
+    }
 
-  const outputFormat = (fields.output_format ?? 'png').toString(); // png|jpeg|webp|gif
-  const strength = fields.strength ? Number(fields.strength) : 0.35; // 0..1
-  const negative = fields.negative_prompt ? fields.negative_prompt.toString() : '';
+    // В formidable v3 путь хранится в "filepath" (в старых версиях был "path")
+    const filePath = fileObj.filepath || fileObj.path;
+    if (!filePath) {
+      return res.status(400).json({
+        ok: false,
+        error: 'no_filepath',
+        details: fileObj,
+      });
+    }
 
-  // 2) Готовим форму для Stability
-  const fd = new FormData();
-  fd.append('image', new Blob([fs.readFileSync(file.filepath)], { type: file.mimetype || 'image/jpeg' }), file.originalFilename || 'image.jpg');
-  fd.append('prompt', prompt);
-  fd.append('output_format', outputFormat);
-  fd.append('strength', String(strength));               // опционально
-  if (negative) fd.append('negative_prompt', negative);  // опционально
-  fd.append('model', 'stable-image-core');               // модель Stable Image Core
+    // 3) Читаем буфер и кодируем в base64
+    const buffer = await fs.readFile(filePath);
+    const initImageBase64 = buffer.toString('base64');
 
-  // 3) Запрос к Stability: принимаем бинарный ответ (картинка)
-  const resp = await fetch(STABILITY_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
-      Accept: 'image/*', // ОБЯЗАТЕЛЬНО: вернет изображение
-    },
-    body: fd,
-  });
+    // 4) Собираем prompt (можно прокидывать с фронта в поле "prompt")
+    const userPrompt = (fields.prompt && String(fields.prompt)) || 'Interior redesign, modern cozy style, photorealistic, high quality';
 
-  // Если пришла ошибка — считаем как текст и пробрасываем
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    return res.status(500).json({ ok: false, error: 'stability_request_failed', details: text });
+    // 5) Запрос в Stability v1 image-to-image
+    const payload = {
+      init_image: initImageBase64,
+      // сила воздействия промпта над исходником (0..1). 0.35—0.6 обычно нормально
+      image_strength: 0.45,
+      text_prompts: [{ text: userPrompt, weight: 1 }],
+      cfg_scale: 7,  // «насколько слушаемся» промпт (1..35). 7–12 ок
+      steps: 30,     // шаги диффузии (10..150)
+      samples: 1,    // кол-во картинок
+    };
+
+    const resp = await fetch(STABILITY_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${STABILITY_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      return res.status(502).json({
+        ok: false,
+        error: 'stability_request_failed',
+        status: resp.status,
+        details: text,
+      });
+    }
+
+    const data = await resp.json();
+    // Ответ v1: { artifacts: [ { base64, finishReason, seed, ... } ] }
+    const artifact = data?.artifacts?.[0];
+    if (!artifact?.base64) {
+      return res.status(500).json({
+        ok: false,
+        error: 'no_artifact',
+        details: data,
+      });
+    }
+
+    const outDataUrl = `data:image/png;base64,${artifact.base64}`;
+
+    // 6) Возвращаем JSON (фронт просто ставит картинку src=dataUrl)
+    return res.status(200).json({ ok: true, image: outDataUrl });
+  } catch (err) {
+    console.error('redesign error:', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'server_error',
+      details: String(err?.message || err),
+    });
   }
-
-  // 4) Отдаем картинку фронту как data URL (base64), чтобы просто показать <img>
-  const arrayBuf = await resp.arrayBuffer();
-  const base64 = Buffer.from(arrayBuf).toString('base64');
-  const mime = resp.headers.get('content-type') || 'image/png';
-
-  return res.status(200).json({ ok: true, imageBase64: `data:${mime};base64,${base64}` });
 }
