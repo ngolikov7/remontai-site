@@ -1,79 +1,93 @@
-// /api/redesign.js — Stability img2img (SDXL)
-const fs = require("fs");
-const formidable = require("formidable");
+// /api/redesign.js
+import { promises as fs } from "fs";
+import { formidable } from "formidable";
 
-// для multipart
-module.exports.config = { api: { bodyParser: false } };
+// В Next/Vercel-функции нужно отключить стандартный bodyParser,
+// иначе multipart (FormData) не дойдёт до formidable.
+export const config = {
+  api: { bodyParser: false },
+};
 
-module.exports = async (req, res) => {
+const STABILITY_ENDPOINT =
+  "https://api.stability.ai/v1/generation/stable-image-core-v1-1/image-to-image";
+
+export default async function handler(req, res) {
   if (req.method !== "POST") {
-    res.status(405).json({ error: "method_not_allowed" });
-    return;
-  }
-
-  const API_KEY = process.env.STABILITY_API_KEY;
-  if (!API_KEY) {
-    res.status(500).json({ error: "missing_env", message: "STABILITY_API_KEY not set" });
+    res.status(405).json({ ok: false, error: "Method Not Allowed" });
     return;
   }
 
   try {
-    const form = formidable({ multiples: false, maxFileSize: 20 * 1024 * 1024 });
-    form.parse(req, async (err, fields, files) => {
-      if (err) {
-        res.status(400).json({ error: "parse_error", details: String(err) });
-        return;
-      }
-
-      // поддержим несколько возможных имён
-      const file = files.file || files.image || files.init_image;
-      if (!file) {
-        res.status(400).json({ error: "no_file", message: "Нет файла init image" });
-        return;
-      }
-
-      const engine = (fields.engine || "stable-diffusion-xl-1024-v1-0").toString();
-      const prompt = (fields.prompt || "interior design, photorealistic, high quality").toString();
-      const strength = fields.strength ? Number(fields.strength) : 0.65;
-      const steps = fields.steps ? Number(fields.steps) : 30;
-
-      const filePath = file.filepath || file.path;
-      const mime = file.mimetype || "image/png";
-      const filename = file.originalFilename || "init.png";
-      const buffer = await fs.promises.readFile(filePath);
-
-      const formData = new FormData();
-      formData.append("init_image", new Blob([buffer], { type: mime }), filename);
-      formData.append("init_image_mode", "IMAGE_STRENGTH");
-      formData.append("image_strength", String(strength));
-      formData.append("samples", "1");
-      formData.append("steps", String(steps));
-      formData.append("cfg_scale", "7");
-      formData.append("text_prompts[0][text]", prompt);
-      formData.append("text_prompts[0][weight]", "1");
-
-      const url = `https://api.stability.ai/v1/generation/${engine}/image-to-image`;
-
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${API_KEY}`,
-          Accept: "image/png",
-        },
-        body: formData,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        res.status(resp.status).json({ error: "stability_error", details: text });
-        return;
-      }
-
-      const arr = await resp.arrayBuffer();
-      res.setHeader("Content-Type", "image/png");
-      res.send(Buffer.from(arr));
+    // 1) Парсим multipart из FormData
+    const form = formidable({
+      multiples: false,
+      maxFileSize: 20 * 1024 * 1024, // 20MB
+      uploadDir: "/tmp",             // безопасная директория на Vercel
+      keepExtensions: true,
     });
-  } catch (e) {
-    res.status(500).json({ error: "server_error", details: String(e) });
+
+    const { fields, files } = await new Promise((resolve, reject) => {
+      form.parse(req, (err, fields, files) => {
+        if (err) return reject(err);
+        resolve({ fields, files });
+      });
+    });
+
+    // 2) Достаём файл
+    let file =
+      files?.photo ||
+      files?.image ||
+      (files && Object.values(files)[0]); // подстраховка по любому ключу
+
+    if (Array.isArray(file)) file = file[0];
+    if (!file) {
+      res.status(400).json({ ok: false, error: "No image uploaded" });
+      return;
+    }
+
+    const filepath = file.filepath || file.path;
+    const buffer = await fs.readFile(filepath);
+
+    // 3) Собираем FormData для Stability (Node 18+/22 имеет встроенный FormData/Blob)
+    const formData = new FormData();
+    formData.append(
+      "image",
+      new Blob([buffer], { type: file.mimetype || "image/jpeg" }),
+      file.originalFilename || "input.jpg"
+    );
+
+    // Полезно передать ваш текстовый промпт (поле "prompt" вы шлёте с фронта)
+    formData.append("prompt", fields.prompt || "interior design, photorealistic");
+    // Можно регулировать силу воздействия изображения (0–1)
+    formData.append("image_strength", fields.image_strength || "0.35");
+
+    // 4) Вызываем Stability
+    const resp = await fetch(STABILITY_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
+        Accept: "image/png", // чтобы пришла картинка
+      },
+      body: formData,
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      return res.status(500).json({
+        ok: false,
+        error: "stability_request_failed",
+        details: errText.slice(0, 1000),
+      });
+    }
+
+    const arrayBuf = await resp.arrayBuffer();
+    const base64 = Buffer.from(arrayBuf).toString("base64");
+    const dataUrl = `data:image/png;base64,${base64}`;
+
+    // 5) Возвращаем dataURL (фронт его кладёт в <img>)
+    res.status(200).json({ ok: true, image: dataUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "server_error", details: String(err) });
   }
-};
+}
